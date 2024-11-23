@@ -4,6 +4,8 @@ import java.nio.file.Paths;
 import java.util.Collection;
 import java.util.List;
 import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -20,7 +22,7 @@ public class Fuzzer {
             throw new RuntimeException("Could not find command '%s'.".formatted(commandToFuzz));
         }
 
-        String seedInput = "";
+        String seedInput = "<html a=\"value\">...</html>";
 
         ProcessBuilder builder = getProcessBuilderForCommand(commandToFuzz, workingDirectory);
         System.out.printf("Command: %s\n", builder.command());
