@@ -20,7 +20,7 @@ public class Fuzzer {
             throw new RuntimeException("Could not find command '%s'.".formatted(commandToFuzz));
         }
 
-        String seedInput = "<html a=\"value\">...</html>";
+        String seedInput = "";
 
         ProcessBuilder builder = getProcessBuilderForCommand(commandToFuzz, workingDirectory);
         System.out.printf("Command: %s\n", builder.command());
