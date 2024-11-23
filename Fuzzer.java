@@ -25,12 +25,76 @@ public class Fuzzer {
         ProcessBuilder builder = getProcessBuilderForCommand(commandToFuzz, workingDirectory);
         System.out.printf("Command: %s\n", builder.command());
 
-        runCommand(builder, seedInput, getMutatedInputs(seedInput, List.of(
-                input -> input.replace("<html", "a"), // this is just a placeholder, mutators should not only do hard-coded string replacement
-                input -> input.replace("<html", "")
-        )));
+        List<Function<String, String>> mutators = List.of(
+                Fuzzer::duplicateTags,
+                input -> increaseAttributeLength(input, 20),
+                input -> increaseContentLength(input, 100),
+                Fuzzer::extendOpeningTagName
+        );
+		
+		boolean allZeroExitCodes = runCommand(builder, seedInput, getMutatedInputs(seedInput, mutators));
+        System.exit(allZeroExitCodes ? 0 : 1);
+		
+    }
+	
+	public static String duplicateTags(String input) {
+        return input.replaceAll("<", "<<").replaceAll(">", ">>");
     }
 
+    public static String increaseAttributeLength(String input, int targetLength) {
+        Pattern pattern = Pattern.compile("(\\w+=\"[^\"]*)\"");
+        Matcher matcher = pattern.matcher(input);
+        StringBuilder result = new StringBuilder();
+        boolean found = false;
+
+        while (matcher.find()) {
+            found = true;
+            StringBuilder value = new StringBuilder(matcher.group(1));
+            while (value.length() < targetLength) {
+                value.append("X");
+            }
+            matcher.appendReplacement(result, value + "\"");
+        }
+        matcher.appendTail(result);
+        return found ? result.toString() : input;
+    }
+
+    public static String increaseContentLength(String input, int targetLength) {
+        Pattern pattern = Pattern.compile(">([^<]*)<");
+        Matcher matcher = pattern.matcher(input);
+        StringBuilder result = new StringBuilder();
+        boolean found = false;
+
+        while (matcher.find()) {
+            found = true;
+            StringBuilder content = new StringBuilder(matcher.group(1));
+            while (content.length() < targetLength) {
+                content.append("Y");
+            }
+            matcher.appendReplacement(result, ">" + content + "<");
+        }
+        matcher.appendTail(result);
+        return found ? result.toString() : input;
+    }
+
+    public static String extendOpeningTagName(String input) {
+        Pattern pattern = Pattern.compile("<(\\w+)");
+        Matcher matcher = pattern.matcher(input);
+        StringBuilder result = new StringBuilder();
+        boolean found = false;
+
+        while (matcher.find()) {
+            found = true;
+            StringBuilder longTagName = new StringBuilder(matcher.group(1));
+            while (longTagName.length() <= 16) {
+                longTagName.append("X");
+            }
+            matcher.appendReplacement(result, "<" + longTagName);
+        }
+        matcher.appendTail(result);
+        return found ? result.toString() : input;
+    }
+	
     private static ProcessBuilder getProcessBuilderForCommand(String command, String workingDirectory) {
         ProcessBuilder builder = new ProcessBuilder();
         boolean isWindows = System.getProperty("os.name").toLowerCase().startsWith("windows");
@@ -44,10 +108,32 @@ public class Fuzzer {
         return builder;
     }
 
-    private static void runCommand(ProcessBuilder builder, String seedInput, List<String> mutatedInputs) {
-        Stream.concat(Stream.of(seedInput), mutatedInputs.stream()).forEach(
-                input -> { }
-        );
+    private static boolean runCommand(ProcessBuilder builder, String seedInput, List<String> mutatedInputs) {
+        return Stream.concat(Stream.of(seedInput), mutatedInputs.stream())
+                .map(input -> {
+                    try {
+                        System.out.printf("Testing input: %s\n", input);
+
+                        Process process = builder.start();
+
+                        try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(process.getOutputStream()))) {
+                            writer.write(input);
+                            writer.flush();
+                        }
+
+                        String output = readStreamIntoString(process.getInputStream());
+                        int exitCode = process.waitFor();
+
+                        System.out.printf("Output: %s\n", output.trim());
+                        System.out.printf("Exit Code: %d\n\n", exitCode);
+
+                        return exitCode;
+                    } catch (Exception e) {
+                        System.err.printf("Error while testing input: %s\n", e.getMessage());
+                        return -1;
+                    }
+                })
+                .allMatch(exitCode -> exitCode == 0); // Ensure all exit codes are 0
     }
 
     private static String readStreamIntoString(InputStream inputStream) {
@@ -58,6 +144,8 @@ public class Fuzzer {
     }
 
     private static List<String> getMutatedInputs(String seedInput, Collection<Function<String, String>> mutators) {
-        return List.of();
+        return mutators.stream()
+                .map(mutator -> mutator.apply(seedInput))
+                .collect(Collectors.toList());
     }
 }
