@@ -22,7 +22,7 @@ public class Fuzzer {
             throw new RuntimeException("Could not find command '%s'.".formatted(commandToFuzz));
         }
 
-        String seedInput = "";
+        String seedInput = "<html></html>";
 
         ProcessBuilder builder = getProcessBuilderForCommand(commandToFuzz, workingDirectory);
         System.out.printf("Command: %s\n", builder.command());
@@ -33,50 +33,64 @@ public class Fuzzer {
                 input -> increaseContentLength(input, 100),
                 Fuzzer::extendOpeningTagName
         );
-		
-		boolean allZeroExitCodes = runCommand(builder, seedInput, getMutatedInputs(seedInput, mutators));
+
+        List<String> mutatedInputs = getMutatedInputs(seedInput, mutators);
+
+        boolean allZeroExitCodes = runCommand(builder, seedInput, mutatedInputs);
         System.exit(allZeroExitCodes ? 0 : 1);
-		
+
+
     }
-	
-	public static String duplicateTags(String input) {
+
+    public static String duplicateTags(String input) {
         return input.replaceAll("<", "<<").replaceAll(">", ">>");
     }
 
     public static String increaseAttributeLength(String input, int targetLength) {
-        Pattern pattern = Pattern.compile("(\\w+=\"[^\"]*)\"");
+        Pattern pattern = Pattern.compile("(\\w+)=\"([^\"]*)\"");
         Matcher matcher = pattern.matcher(input);
         StringBuilder result = new StringBuilder();
         boolean found = false;
 
         while (matcher.find()) {
             found = true;
-            StringBuilder value = new StringBuilder(matcher.group(1));
+            String attributeName = matcher.group(1);
+            StringBuilder value = new StringBuilder(matcher.group(2));
             while (value.length() < targetLength) {
                 value.append("X");
             }
-            matcher.appendReplacement(result, value + "\"");
+            matcher.appendReplacement(result, attributeName + "=\"" + value + "\"");
         }
         matcher.appendTail(result);
-        return found ? result.toString() : input;
+
+        if (!found && input.matches(".*?<\\w+.*?>.*")) {
+            Pattern tagPattern = Pattern.compile("<(\\w+)([^>]*)>");
+            Matcher tagMatcher = tagPattern.matcher(input);
+            if (tagMatcher.find()) {
+                result = new StringBuilder(input);
+                int insertPosition = tagMatcher.end(1);
+                result.insert(insertPosition, " newAttr=\"XXXXXXXXXX\"");
+            }
+        }
+
+        return result.toString();
     }
 
     public static String increaseContentLength(String input, int targetLength) {
-        Pattern pattern = Pattern.compile(">([^<]*)<");
+        Pattern pattern = Pattern.compile("<(\\w+)[^>]*>(.*?)</(\\1)>"); // Capture tag content
         Matcher matcher = pattern.matcher(input);
-        StringBuilder result = new StringBuilder();
-        boolean found = false;
+        StringBuffer result = new StringBuffer();
 
         while (matcher.find()) {
-            found = true;
-            StringBuilder content = new StringBuilder(matcher.group(1));
-            while (content.length() < targetLength) {
-                content.append("Y");
+            String content = matcher.group(2);
+            StringBuilder newContent = new StringBuilder(content);
+            while (newContent.length() < targetLength) {
+                newContent.append("Y");
             }
-            matcher.appendReplacement(result, ">" + content + "<");
+            matcher.appendReplacement(result, "<" + matcher.group(1) + ">" + newContent + "</" + matcher.group(1) + ">");
         }
         matcher.appendTail(result);
-        return found ? result.toString() : input;
+        return result.toString();
     }
 
     public static String extendOpeningTagName(String input) {
@@ -96,7 +110,7 @@ public class Fuzzer {
         matcher.appendTail(result);
         return found ? result.toString() : input;
     }
-	
+
     private static ProcessBuilder getProcessBuilderForCommand(String command, String workingDirectory) {
         ProcessBuilder builder = new ProcessBuilder();
         boolean isWindows = System.getProperty("os.name").toLowerCase().startsWith("windows");
@@ -111,31 +125,37 @@ public class Fuzzer {
     }
 
     private static boolean runCommand(ProcessBuilder builder, String seedInput, List<String> mutatedInputs) {
-        return Stream.concat(Stream.of(seedInput), mutatedInputs.stream())
-                .map(input -> {
-                    try {
-                        System.out.printf("Testing input: %s\n", input);
+        boolean allSuccess = true;
 
-                        Process process = builder.start();
+        for (String input : Stream.concat(Stream.of(seedInput), mutatedInputs.stream()).toList()) {
+            try {
+                System.out.printf("Testing input: %s\n", input);
 
-                        try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(process.getOutputStream()))) {
-                            writer.write(input);
-                            writer.flush();
-                        }
+                Process process = builder.start();
 
-                        String output = readStreamIntoString(process.getInputStream());
-                        int exitCode = process.waitFor();
+                try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(process.getOutputStream()))) {
+                    writer.write(input);
+                    writer.flush();
 
-                        System.out.printf("Output: %s\n", output.trim());
-                        System.out.printf("Exit Code: %d\n\n", exitCode);
+                }
 
-                        return exitCode;
-                    } catch (Exception e) {
-                        System.err.printf("Error while testing input: %s\n", e.getMessage());
-                        return -1;
-                    }
-                })
-                .allMatch(exitCode -> exitCode == 0); // Ensure all exit codes are 0
+                String output = readStreamIntoString(process.getInputStream());
+                int exitCode = process.waitFor();
+
+                System.out.printf("Output: %s\n", output.trim());
+                System.out.printf("Exit Code: %d\n\n", exitCode);
+
+                if (exitCode != 0) {
+                    allSuccess = false;
+                    System.err.println("Error: Program exited with a non-zero exit code.");
+                }
+            } catch (Exception e) {
+                System.err.printf("Error while testing input: %s\n", e.getMessage());
+                allSuccess = false;
+            }
+        }
+
+        return allSuccess;
     }
 
     private static String readStreamIntoString(InputStream inputStream) {
