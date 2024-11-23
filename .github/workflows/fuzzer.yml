@@ -23,5 +23,5 @@ jobs:
         java-version: '21'
 
     - name: Run Fuzzer
-      run: java Fuzzer.java html_parser_linux_x86_64
+      run: java Fuzzer.java "./html_parser_linux_x86_64"
 
